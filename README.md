@@ -1,20 +1,9 @@
-# ANODEFLEX_4N_8R_2INY_CAL_1X4_v1.0.1
+# ANODEFLEX_4N_8R_2INY_CAL_1X4_Beta
 
-Aplicación para calcular las resistencias de ocho ramas a partir de dos mediciones de campo independientes y regularlas con una sola inyección.
+Aplicación Beta para calibrar 8 ramas en 4 nodos mediante tensiones de fuente y de nodo y corrientes medidas con los reóstatos en 0 Ω. Las tensiones deben medirse respecto a una misma referencia.
 
-## Mediciones de campo
+La medición A comprende los nodos 1 a 2. La medición B comprende los nodos 3 a 4. Cada Rc es la caída de tensión en el tramo dividida por la corriente de ese tramo. Cada resistencia fija es la tensión del nodo dividida por la corriente de la rama. Se rechazan tensiones crecientes aguas abajo.
 
-- Lado A: VA → Rc1 → nodo 1 → Rc2 → nodo 2; ramas 11, 12, 21 y 22.
-- Lado B: VB → Rc3 → nodo 3 → Rc4 → nodo 4; ramas 31, 32, 41 y 42.
+Una sola fuente alimenta los 4 nodos en regulación. La resistencia Rc3 medida entre la fuente B y el nodo 3 se utiliza entre los nodos 2 y 3; verifique que corresponda al cable reconectado. El voltaje de trabajo es independiente de los voltajes de medición. La aplicación permite ajustar los reóstatos, exportar e importar casos e imprimir resultados.
 
-La calibración conserva el cálculo de ANODEFLEX_4N_8R_2INY_CAL_2X2N_v1.0.1. Las dos mediciones se realizan con los reóstatos en 0 Ω.
-
-## Regulación
-
-Una fuente independiente alimenta desde el nodo 1 los cuatro tramos Rc1 a Rc4 en secuencia. El voltaje de regulación es una entrada propia: no es la suma de VA y VB. La aplicación calcula el voltaje mínimo y los reóstatos para las ocho corrientes objetivo, o permite ajustar el voltaje y los reóstatos manualmente. Un ajuste que supera el máximo configurado se declara inviable.
-
-Los casos se pueden exportar e importar como archivos JSON. GitHub Pages sirve la carpeta `docs`.
-
-## Comprobación
-
-Ejecute `node tests/model.test.js` y `node tests/static.test.js`.
+Ejecute `node tests/model.test.js`, `node tests/static.test.js` y `node tests/app.test.js`.

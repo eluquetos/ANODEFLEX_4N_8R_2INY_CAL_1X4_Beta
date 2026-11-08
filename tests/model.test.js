@@ -1,31 +1,15 @@
-const assert=require("node:assert/strict");
-const model=require("../docs/model.js");
-const currents={11:1.2,12:1,21:.9,22:.9,31:.8,32:.7,41:.6,42:.5};
-const cables={Rc1:.4,Rc2:.3,Rc3:.2,Rc4:.1};
-const nominal=model.dimension({VA:24,VB:24,...cables,currents});
-const expectedVoltages={1:22.4,2:21.86,3:23.48,4:23.37};
-for(const node of model.NODES)assert.ok(Math.abs(nominal.voltages[node]-expectedVoltages[node])<1e-12,`medición V${node}`);
-const zero=Object.fromEntries(model.IDS.map(id=>[id,0]));
-const operating=model.simulate({V:24,...cables,fixed:nominal.fixed,rheostats:zero});
-assert.ok(Math.abs(operating.It-6.015451011783534)<1e-12);
-assert.ok(Math.abs(operating.pError)<1e-10);
-for(const node of model.NODES){const outgoing=operating.currents[node+"1"]+operating.currents[node+"2"]+(node<4?operating.trunks[node+1]:0);assert.ok(Math.abs(operating.trunks[node]-outgoing)<1e-12,`KCL nodo ${node}`)}
-assert.ok(operating.trunks[1]>operating.trunks[2]&&operating.trunks[2]>operating.trunks[3]&&operating.trunks[3]>operating.trunks[4]);
-const throttled=model.simulate({V:24,...cables,fixed:nominal.fixed,rheostats:{...zero,11:10}});
-assert.ok(throttled.currents[11]<operating.currents[11]);
-const edited=model.simulate({V:24,...cables,fixed:{...nominal.fixed,31:nominal.fixed[31]+5},rheostats:zero});
-assert.ok(edited.currents[31]<operating.currents[31]);
-const targets=Object.fromEntries(model.IDS.map(id=>[id,.3]));
-const adjustment=model.adjust({...cables,fixed:nominal.fixed,targets,maxReo:100});
-assert.equal(adjustment.feasible,true);
-assert.ok(adjustment.zero.length>=1);assert.equal(Math.min(...Object.values(adjustment.rheostats)),0);
-const adjusted=model.simulate({V:adjustment.V,...cables,fixed:nominal.fixed,rheostats:adjustment.rheostats});
-for(const id of model.IDS)assert.ok(Math.abs(adjusted.currents[id]-targets[id])<1e-12,`objetivo I${id}`);
-assert.throws(()=>model.dimension({VA:1,VB:24,...cables,currents}),error=>error.message==="voltage-exhausted"&&error.side==="A");
-console.log("Pruebas del modelo ANODEFLEX 2 + 2 con una inyección: correctas");
-
-// Las mediciones son idénticas a las de la aplicación de dos inyecciones.
-for(const node of model.NODES){const previous=node===1?operating.V:operating.voltages[node-1];assert.ok(Math.abs(previous-operating.trunks[node]*cables["Rc"+node]-operating.voltages[node])<1e-10,`KVL nodo ${node}`)}
-assert.equal(model.adjust({...cables,fixed:nominal.fixed,targets,maxReo:.001}).feasible,false);
-assert.throws(()=>model.dimension({VA:24,VB:.1,...cables,currents}),error=>error.message==="voltage-exhausted"&&error.side==="B");
-
+const assert=require('node:assert/strict');const m=require('../docs/model.js');
+const N=4,SPLIT=2,ids=m.IDS,near=(a,b)=>Math.abs(a-b)<1e-9;
+const currents=Object.fromEntries(ids.map((id,i)=>[id,1+i*.1])),cables={},voltages={};let v=30;
+for(let n=1;n<=N;n++){if(n===SPLIT+1)v=25;let end=n<=SPLIT?SPLIT:N;let it=ids.filter(id=>+id[0]>=n&&+id[0]<=end).reduce((s,id)=>s+currents[id],0);cables['Rc'+n]=n*.1;v-=it*cables['Rc'+n];voltages[n]=v}
+const input={VA:30,VB:25,voltages,currents},r=m.dimension(input);
+for(let n=1;n<=N;n++)assert.ok(near(r.cables[n],cables['Rc'+n]),'Rc'+n);
+for(const id of ids)assert.ok(near(r.fixed[id]*currents[id],voltages[id[0]]));
+const zero=Object.fromEntries(ids.map(id=>[id,0]));const targets=Object.fromEntries(ids.map(id=>[id,.2]));
+const op=m.simulate({V:30,...cables,fixed:r.fixed,rheostats:zero});
+for(let n=1;n<=N;n++){assert.ok(near(op.trunks[n],op.currents[n+'1']+op.currents[n+'2']+(n<N?op.trunks[n+1]:0)));assert.ok(near((n===1?op.V:op.voltages[n-1])-op.voltages[n],op.trunks[n]*cables['Rc'+n]))}assert.ok(near(op.pError,0));
+const adj=m.adjust({...cables,fixed:r.fixed,targets,maxReo:1000});assert.equal(adj.feasible,true);let solved=m.simulate({V:adj.V,...cables,fixed:r.fixed,rheostats:adj.rheostats});for(const id of ids)assert.ok(near(solved.currents[id],targets[id]));
+assert.equal(m.adjust({...cables,fixed:r.fixed,targets,maxReo:.0001}).feasible,false);
+assert.throws(()=>m.dimension({...input,voltages:{...voltages,1:31}}),/voltage-rise/);assert.throws(()=>m.dimension({...input,currents:{...currents,11:0}}),/invalid-input/);
+if(SPLIT<N)assert.throws(()=>m.dimension({...input,voltages:{...voltages,[SPLIT+1]:26}}),/voltage-rise/);
+console.log('Calibración y regulación: correctas');

@@ -1,57 +1,71 @@
 (function(root,factory){const api=factory();if(typeof module==="object"&&module.exports)module.exports=api;else root.AnodeflexModel=api})(typeof globalThis!=="undefined"?globalThis:this,function(){
   const NODES=[1,2,3,4];
-  const IDS=["11","12","21","22","31","32","41","42"];
-  const SIDES={
-    A:{voltage:"VA",near:1,far:2,rcNear:"Rc1",rcFar:"Rc2",ids:["11","12","21","22"]},
-    B:{voltage:"VB",near:3,far:4,rcNear:"Rc3",rcFar:"Rc4",ids:["31","32","41","42"]}
-  };
-  const sum=values=>values.reduce((a,b)=>a+b,0);
+  const IDS=NODES.flatMap(node=>[`${node}1`,`${node}2`]);
+  const SIDES={A:{voltage:"VA",nodes:[1, 2] },B:{voltage:"VB",nodes:[3, 4] }};
+  const sum=values=>values.reduce((total,value)=>total+value,0);
   const parallel=values=>1/sum(values.map(value=>1/value));
-
-  function finitePositive(value){return Number.isFinite(value)&&value>0}
-  function validateSide(input,side,allowZeroVoltage=false){
-    const data=SIDES[side],voltage=Number(input[data.voltage]),rcNear=Number(input[data.rcNear]),rcFar=Number(input[data.rcFar]);
-    if((allowZeroVoltage?voltage<0:voltage<=0)||!Number.isFinite(voltage)||!Number.isFinite(rcNear)||rcNear<0||!Number.isFinite(rcFar)||rcFar<0)throw new Error("invalid-input");
-    return {data,voltage,rcNear,rcFar};
-  }
+  const positive=value=>Number.isFinite(value)&&value>0;
+  const cablesFrom=input=>Object.fromEntries(NODES.map(node=>[node,Number(input[`Rc${node}`])]));
+  const validCables=cables=>NODES.every(node=>Number.isFinite(cables[node])&&cables[node]>=0);
+  const nodeIds=node=>[`${node}1`,`${node}2`];
 
   function dimensionSide(input,side){
-    const {data,voltage,rcNear,rcFar}=validateSide(input,side),currents=input.currents;
-    if(data.ids.some(id=>!finitePositive(currents[id])))throw new Error("invalid-input");
-    const nearIds=data.ids.slice(0,2),farIds=data.ids.slice(2),iFar=sum(farIds.map(id=>currents[id])),iTotal=iFar+sum(nearIds.map(id=>currents[id]));
-    const vNear=voltage-iTotal*rcNear,vFar=vNear-iFar*rcFar;
-    if(vNear<=0||vFar<=0){const error=new Error("voltage-exhausted");error.side=side;throw error}
-    const fixed={};nearIds.forEach(id=>fixed[id]=vNear/currents[id]);farIds.forEach(id=>fixed[id]=vFar/currents[id]);
-    return {voltage,voltages:{[data.near]:vNear,[data.far]:vFar},trunks:{[data.near]:iTotal,[data.far]:iFar},fixed,It:iTotal,cables:{[data.near]:rcNear,[data.far]:rcFar}};
+    const {voltage:voltageKey,nodes}=SIDES[side],source=Number(input[voltageKey]),currents=input.currents;
+    if(!positive(source)||!currents||nodes.some(node=>nodeIds(node).some(id=>!positive(currents[id]))))throw new Error("invalid-input");
+    const voltages={},trunks={},fixed={},cables={};let previous=source;
+    for(const node of nodes){
+      const voltage=Number(input.voltages?.[node]);
+      if(!positive(voltage))throw new Error("invalid-input");
+      if(voltage>previous){const error=new Error("voltage-rise");error.side=side;error.node=node;throw error}
+      trunks[node]=sum(nodes.filter(n=>n>=node).flatMap(nodeIds).map(id=>currents[id]));
+      voltages[node]=voltage;cables[node]=(previous-voltage)/trunks[node];previous=voltage;
+      for(const id of nodeIds(node))fixed[id]=voltage/currents[id];
+    }
+    return {source,voltages,trunks,fixed,cables,It:trunks[nodes[0]]||0};
   }
 
   function dimension(input){
     const a=dimensionSide(input,"A"),b=dimensionSide(input,"B");
-    return {VA:a.voltage,VB:b.voltage,currents:{...input.currents},fixed:{...a.fixed,...b.fixed},voltages:{...a.voltages,...b.voltages},trunks:{...a.trunks,...b.trunks},cables:{...a.cables,...b.cables},sides:{A:a,B:b},It:a.It+b.It};
+    return {VA:a.source,VB:b.source,currents:{...input.currents},fixed:{...a.fixed,...b.fixed},voltages:{...a.voltages,...b.voltages},trunks:{...a.trunks,...b.trunks},cables:{...a.cables,...b.cables},sides:{A:a,B:b},It:a.It+b.It};
   }
 
   function simulate(input){
-    const V=Number(input.V),cables=Object.fromEntries(NODES.map(node=>[node,Number(input["Rc"+node])]));
-    if(!Number.isFinite(V)||V<0||NODES.some(node=>!Number.isFinite(cables[node])||cables[node]<0))throw new Error("invalid-input");
-    const branch=Object.fromEntries(IDS.map(id=>[id,Number(input.fixed[id])+Math.max(0,Number(input.rheostats[id])||0)]));
-    if(IDS.some(id=>!finitePositive(branch[id])))throw new Error("invalid-resistance");
+    const V=Number(input.V),cables=cablesFrom(input),fixed=input.fixed,rheostats=input.rheostats;
+    if(!Number.isFinite(V)||V<0||!validCables(cables))throw new Error("invalid-input");
+    const branch=Object.fromEntries(IDS.map(id=>[id,Number(fixed[id])+Number(rheostats[id])]));
+    if(IDS.some(id=>!positive(branch[id])||!Number.isFinite(rheostats[id])||rheostats[id]<0))throw new Error("invalid-resistance");
     const equivalents={},downstreamPaths={};
-    for(let node=4;node>=1;node--){const paths=[branch[node+"1"],branch[node+"2"]];if(node<4){downstreamPaths[node]=cables[node+1]+equivalents[node+1];paths.push(downstreamPaths[node])}equivalents[node]=parallel(paths)}
-    const Rt=cables[1]+equivalents[1],It=V/Rt,currents={},voltages={},trunks={1:It};let incoming=It,voltage=V-incoming*cables[1];
-    for(const node of NODES){voltages[node]=voltage;currents[node+"1"]=voltage/branch[node+"1"];currents[node+"2"]=voltage/branch[node+"2"];if(node<4){incoming=voltage/downstreamPaths[node];trunks[node+1]=incoming;voltage-=incoming*cables[node+1]}}
-    const pCable=sum(NODES.map(node=>trunks[node]**2*cables[node])),pBranches=sum(IDS.map(id=>currents[id]**2*branch[id])),pSource=V*It;
-    return {V,fixed:{...input.fixed},rheostats:{...input.rheostats},branch,currents,voltages,trunks,cables,equivalents,downstreamPaths,Rt,It,pCable,pBranches,pSource,pError:pSource-pCable-pBranches};
+    for(let node=NODES.length;node>=1;node--){
+      const paths=nodeIds(node).map(id=>branch[id]);
+      if(node<NODES.length){downstreamPaths[node]=cables[node+1]+equivalents[node+1];paths.push(downstreamPaths[node])}
+      equivalents[node]=parallel(paths);
+    }
+    const Rt=cables[1]+equivalents[1],It=V/Rt,currents={},voltages={},trunks={1:It};
+    let incoming=It,voltage=V-incoming*cables[1];
+    for(const node of NODES){
+      voltages[node]=voltage;
+      for(const id of nodeIds(node))currents[id]=voltage/branch[id];
+      if(node<NODES.length){incoming=voltage/downstreamPaths[node];trunks[node+1]=incoming;voltage-=incoming*cables[node+1]}
+    }
+    const pCable=sum(NODES.map(node=>trunks[node]**2*cables[node]));
+    const pBranches=sum(IDS.map(id=>currents[id]**2*branch[id]));
+    const pSource=V*It;
+    return {V,fixed:{...fixed},rheostats:{...rheostats},branch,currents,voltages,trunks,cables,equivalents,downstreamPaths,Rt,It,pCable,pBranches,pSource,pError:pSource-pCable-pBranches};
   }
 
   function adjust(input){
-    const cables=Object.fromEntries(NODES.map(node=>[node,Number(input["Rc"+node])])),targets=input.targets;
-    if(!finitePositive(input.maxReo)||NODES.some(node=>!Number.isFinite(cables[node])||cables[node]<0)||IDS.some(id=>!finitePositive(targets[id])||!finitePositive(input.fixed[id])))throw new Error("invalid-target");
-    const trunks=Object.fromEntries(NODES.map(node=>[node,sum(IDS.filter(id=>Number(id[0])>=node).map(id=>targets[id]))])),drops={};let drop=0;
-    for(const node of NODES){drop+=trunks[node]*cables[node];drops[node]=drop}
+    const cables=cablesFrom(input),targets=input.targets,maxReo=Number(input.maxReo);
+    if(!positive(maxReo)||!validCables(cables)||IDS.some(id=>!positive(targets[id])||!positive(input.fixed[id])))throw new Error("invalid-target");
+    const trunks={},drops={};let drop=0;
+    for(const node of NODES){
+      trunks[node]=sum(NODES.filter(n=>n>=node).flatMap(nodeIds).map(id=>targets[id]));
+      drop+=trunks[node]*cables[node];drops[node]=drop;
+    }
     const V=Math.max(...IDS.map(id=>drops[Number(id[0])]+targets[id]*input.fixed[id])),voltages=Object.fromEntries(NODES.map(node=>[node,V-drops[node]]));
-    const rheostats=Object.fromEntries(IDS.map(id=>{const value=voltages[Number(id[0])]/targets[id]-input.fixed[id];return [id,Math.abs(value)<1e-8?0:value]})),negative=IDS.filter(id=>rheostats[id]<-1e-8),over=IDS.filter(id=>rheostats[id]>input.maxReo+1e-8),zero=IDS.filter(id=>rheostats[id]===0);
+    const rheostats=Object.fromEntries(IDS.map(id=>{const value=voltages[Number(id[0])]/targets[id]-input.fixed[id];return [id,Math.abs(value)<1e-8?0:value]}));
+    const negative=IDS.filter(id=>rheostats[id]<-1e-8),over=IDS.filter(id=>rheostats[id]>maxReo+1e-8),zero=IDS.filter(id=>rheostats[id]===0);
     return {feasible:negative.length===0&&over.length===0,V,voltages,trunks,rheostats,negative,over,zero};
   }
 
-  return {NODES,IDS,SIDES,dimension,simulate,adjust};
+  return {NODES,IDS,SIDES,dimensionSide,dimension,simulate,adjust};
 });
